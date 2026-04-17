@@ -263,4 +263,5 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
         if np.all(self.touched):
             self.reward += 200.0
             self.info["all_dots_touched"] = True
+            self.info["env_complete"] = True
             self.truncation |= True
