@@ -13,7 +13,6 @@ import numpy as np
 from gymnasium import spaces
 
 from cyberFly.gym_envs.quadx_envs.quadx_base_env import QuadXBaseEnv
-from cyberFly.gym_envs.utils.waypoint_handler import WaypointHandler
 
 
 class QuadXDotTouchEnv(QuadXBaseEnv):
