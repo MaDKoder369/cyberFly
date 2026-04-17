@@ -198,7 +198,7 @@ bonus and the episode is flagged as complete.
 
 Dots are placed using **spherical coordinates** sampled uniformly:
 
-1. Sample `θ ∈ [0, 2π)` (azimuth) and `φ ∈ [0, 2π)` (polar angle).
+1. Sample `θ ∈ [0, 2π)` (azimuth) and `φ ∈ [0, π]` (polar angle).
 2. Sample `r ∈ [1.0, 0.9 × flight_dome_size]`.
 3. Convert to Cartesian:
    - `x = r · sin(φ) · cos(θ)`

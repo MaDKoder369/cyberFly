@@ -109,7 +109,7 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
     # Reset
     # ------------------------------------------------------------------
     def reset(
-        self, *, seed: None | int = None, options: None | dict[str, Any] = dict()
+        self, *, seed: None | int = None, options: None | dict[str, Any] = None
     ) -> tuple[dict[str, np.ndarray], dict]:
         """Reset the environment and scatter new dots.
 
@@ -117,6 +117,8 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
             seed: seed to pass to the base environment.
             options: None.
         """
+        if options is None:
+            options = dict()
         super().begin_reset(seed, options)
 
         # Generate random dot positions inside the flight dome
@@ -147,7 +149,7 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
         self.dots = np.zeros((self.num_dots, 3))
         for i in range(self.num_dots):
             theta = self.np_random.uniform(0.0, 2.0 * np.pi)
-            phi = self.np_random.uniform(0.0, 2.0 * np.pi)
+            phi = self.np_random.uniform(0.0, np.pi)
             dist = self.np_random.uniform(1.0, self.flight_dome_size * 0.9)
             x = dist * np.sin(phi) * np.cos(theta)
             y = dist * np.sin(phi) * np.sin(theta)
