@@ -19,9 +19,9 @@ penalty and immediately ends the episode.
 | **Touch a new dot** | +50 reward, dot turns grey |
 | **Touch an already-visited dot** | −100 reward, episode **terminates** |
 | **All dots touched** | +200 bonus reward, episode **completes** |
-| **Crash into the ground** | −100 reward, episode terminates |
-| **Leave the flight dome** | −100 reward, episode terminates |
-| **Time runs out** | Episode truncated (no extra penalty) |
+| **Crash into the ground** | Base −100 penalty and episode terminates; the final step reward may still include other same-step reward components |
+| **Leave the flight dome** | Base −100 penalty and episode terminates; the final step reward may still include other same-step reward components |
+| **Time runs out** | Episode truncated; no added timeout penalty, though the final step reward may still include other reward terms already computed |
 
 ---
 
