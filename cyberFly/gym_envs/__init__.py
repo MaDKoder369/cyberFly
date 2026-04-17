@@ -29,6 +29,10 @@ register(
     id="cyberFly/QuadX-Ball-In-Cup-v4",
     entry_point="cyberFly.gym_envs.quadx_envs.quadx_ball_in_cup_env:QuadXBallInCupEnv",
 )
+register(
+    id="cyberFly/QuadX-DotTouch-v1",
+    entry_point="cyberFly.gym_envs.quadx_envs.quadx_dot_touch_env:QuadXDotTouchEnv",
+)
 
 # Fixedwing Envs
 register(
