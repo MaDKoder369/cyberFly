@@ -58,7 +58,7 @@ A flat numpy array combining:
 | Previous action | 4 | Last motor command sent |
 | Auxiliary state | 4 | Extra sensor data from the drone |
 
-Total size: **20** (quaternion) or **19** (euler).
+Total size: **21** (quaternion) or **20** (euler).
 
 ### 2. `"dot_deltas"` — Body-Frame Vectors to Every Dot
 
