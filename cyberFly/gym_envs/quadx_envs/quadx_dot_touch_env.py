@@ -125,6 +125,11 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
 
         # Track which dots have been touched (boolean array)
         self.touched = np.zeros(self.num_dots, dtype=bool)
+        # Track dots touched within the current outer step (cleared each step)
+        self._touched_this_step = np.zeros(self.num_dots, dtype=bool)
+        # Track whether the drone was inside each dot's radius last step
+        # (prevents re-trigger while drone lingers inside the radius)
+        self._inside_radius = np.zeros(self.num_dots, dtype=bool)
 
         # Info
         self.info["dots_touched"] = 0
@@ -229,6 +234,13 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
         self.state = new_state
 
     # ------------------------------------------------------------------
+    # Step override
+    # ------------------------------------------------------------------
+    def step(self, action):
+        """Step the environment, resetting the per-step touch tracker."""
+        self._touched_this_step[:] = False
+        return super().step(action)
+    # ------------------------------------------------------------------
     # Reward / termination / truncation
     # ------------------------------------------------------------------
     def compute_term_trunc_reward(self) -> None:
@@ -236,20 +248,25 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
         super().compute_base_term_trunc_reward()
 
         # Check each dot for proximity
+        currently_inside = self._current_distances < self.dot_touch_distance
         for i in range(self.num_dots):
-            if self._current_distances[i] < self.dot_touch_distance:
+            if currently_inside[i]:
                 if self.touched[i]:
-                    # Already touched – penalise and terminate
-                    self.reward = -100.0
-                    self.info["double_touch"] = True
-                    self.termination |= True
-                    return
+                    # Double-touch: only penalise if the drone re-entered after leaving
+                    if not self._inside_radius[i]:
+                        self.reward = -100.0
+                        self.info["double_touch"] = True
+                        self.termination |= True
+                        self._inside_radius = currently_inside
+                        return
                 else:
-                    # First touch – reward
+                    # First touch
                     self.touched[i] = True
+                    self._touched_this_step[i] = True
                     self.reward += 50.0
                     self.info["dots_touched"] = int(np.sum(self.touched))
                     self._update_dot_colour(i)
+        self._inside_radius = currently_inside
 
         # Small shaping reward: encourage getting closer to the nearest
         # un-touched dot

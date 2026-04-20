@@ -155,10 +155,6 @@ class QuadXBaseEnv(gymnasium.Env):
         """The first half of the reset function."""
         super().reset(seed=seed)
 
-        # if we already have an env, disconnect from it
-        if hasattr(self, "env"):
-            self.env.disconnect()
-
         self.step_count = 0
         self.termination = False
         self.truncation = False
@@ -182,15 +178,21 @@ class QuadXBaseEnv(gymnasium.Env):
         )
         drone_options["camera_fps"] = int(120 / self.env_step_ratio)
 
-        # init env
-        self.env = Aviary(
-            start_pos=self.start_pos,
-            start_orn=self.start_orn,
-            drone_type="quadx",
-            render=self.render_mode == "human",
-            drone_options=drone_options,
-            np_random=self.np_random,
-        )
+        # init env — reuse the existing Aviary (and its PyBullet connection) on
+        # subsequent resets so the GUI window is not closed and reopened every
+        # episode.
+        if hasattr(self, "env"):
+            self.env.np_random = self.np_random
+            self.env.reset()
+        else:
+            self.env = Aviary(
+                start_pos=self.start_pos,
+                start_orn=self.start_orn,
+                drone_type="quadx",
+                render=self.render_mode == "human",
+                drone_options=drone_options,
+                np_random=self.np_random,
+            )
 
         if self.render_mode == "human":
             self.camera_parameters = self.env.getDebugVisualizerCamera()

@@ -31,7 +31,7 @@ penalty and immediately ends the episode.
 |-----------|---------|-------------|
 | `num_dots` | 6 | Number of dots placed in the arena |
 | `dot_touch_distance` | 0.5 | Distance (metres) at which a dot counts as "touched" |
-| `flight_mode` | 0 | PyBullet flight-control mode (0 = angular-rate + thrust) |
+| `flight_mode` | 0 | PyBullet flight-control mode (0 = angular-rate + thrust, **6 = local velocity** — recommended for scripted policies) |
 | `flight_dome_size` | 5.0 | Radius of the invisible dome the drone must stay inside |
 | `max_duration_seconds` | 20.0 | Wall-clock simulation limit before the episode is truncated |
 | `angle_representation` | `"quaternion"` | `"euler"` or `"quaternion"` for orientation encoding |
@@ -92,7 +92,9 @@ which is critical for learning to avoid double-touches.
 
 ## Action Space
 
-Continuous `Box(4,)`:
+Continuous `Box(4,)`. The layout depends on `flight_mode`:
+
+### Mode 0 — Angular-rate + Thrust (default)
 
 | Index | Meaning | Range |
 |-------|---------|-------|
@@ -101,8 +103,21 @@ Continuous `Box(4,)`:
 | 2 | Yaw rate (vr) | [−π, π] |
 | 3 | Thrust (T) | [0, 0.8] |
 
-These correspond to desired angular rates around the body axes plus a
-normalised collective thrust.
+Desired angular rates around the body axes plus a normalised collective thrust.
+Low-level control — requires careful gain tuning to achieve stable flight.
+
+### Mode 6 — Local Velocity (recommended for scripted / heuristic policies)
+
+| Index | Meaning | Range |
+|-------|---------|-------|
+| 0 | Forward velocity (vx) | m/s |
+| 1 | Lateral velocity (vy) | m/s |
+| 2 | Yaw rate (vr) | rad/s |
+| 3 | Vertical velocity (vz) | m/s |
+
+The low-level controller tracks these velocity setpoints internally.
+Much easier to command a dot-touching policy from: simply point the
+velocity vector at the target dot.
 
 ---
 
@@ -217,19 +232,33 @@ from the drone's spawn point (r ≥ 1.0 m).
 
 ```python
 import gymnasium
+import numpy as np
 import cyberFly.gym_envs  # registers all cyberFly environments
 
-env = gymnasium.make("cyberFly/QuadX-DotTouch-v1", render_mode="human")
+# flight_mode=6: action = [vx, vy, vr, vz] (local velocity control)
+env = gymnasium.make("cyberFly/QuadX-DotTouch-v1", render_mode="human", flight_mode=6)
 obs, info = env.reset()
 
-for _ in range(1000):
-    action = env.action_space.sample()  # replace with your policy
+for _ in range(10000):
+    # Simple heuristic: fly toward the nearest untouched dot
+    deltas  = obs["dot_deltas"]           # (N,3) body-frame vectors to dots
+    touched = obs["dot_touched"]          # (N,) 1.0 = already visited
+    dists = np.linalg.norm(deltas, axis=1)
+    dists[touched == 1.0] = np.inf        # ignore touched dots
+    if np.all(np.isinf(dists)):
+        action = np.zeros(4)
+    else:
+        d = deltas[np.argmin(dists)]
+        action = np.clip([1.5 * d[0], 1.5 * d[1], 0.0, 1.5 * d[2]], -2, 2)
     obs, reward, terminated, truncated, info = env.step(action)
     if terminated or truncated:
         obs, info = env.reset()
 
 env.close()
 ```
+
+See [`_run_dot_touch.py`](_run_dot_touch.py) for the full heuristic policy with
+braking near the target and episode logging.
 
 ### Training with Stable-Baselines3
 
@@ -263,7 +292,9 @@ env = gymnasium.make(
 | File | Purpose |
 |------|---------|
 | `cyberFly/gym_envs/quadx_envs/quadx_dot_touch_env.py` | Environment implementation |
+| `cyberFly/gym_envs/quadx_envs/quadx_base_env.py` | Base class (window-cycling fix) |
 | `cyberFly/gym_envs/__init__.py` | Gymnasium registration (`cyberFly/QuadX-DotTouch-v1`) |
+| `_run_dot_touch.py` | Heuristic policy demo (flight_mode=6, achieves 6/6 dots) |
 | `DOT_TOUCH_GAME.md` | This explanation document |
 
 ---
@@ -291,6 +322,41 @@ env = gymnasium.make(
 
 5. **Generous time limit** – The default 20-second episode is long enough for
    a well-trained policy to visit 6 dots without excessive time pressure.
+
+---
+
+## Bug Fixes & Implementation Notes
+
+### PyBullet GUI window cycling (fixed)
+Previously, every call to `env.reset()` closed and re-opened the PyBullet
+rendering window because `begin_reset()` called `self.env.disconnect()` followed
+by a fresh `Aviary(render=True)`. Fixed in `quadx_base_env.py` by reusing the
+existing `Aviary` instance via `self.env.reset()` on subsequent resets:
+
+```python
+if hasattr(self, "env"):
+    self.env.np_random = self.np_random
+    self.env.reset()          # reuse — keeps the window open
+else:
+    self.env = Aviary(...)    # first call only
+```
+
+### Sub-step double-touch false positive (fixed)
+The environment runs `env_step_ratio = 4` physics sub-steps per agent step.
+Previously, `compute_term_trunc_reward` was called on every sub-step. When
+the drone first entered a dot's radius on sub-step 1, the dot was marked
+touched. On sub-step 2 the drone was still inside the same radius (it barely
+moved in 1/120 s), triggering the double-touch penalty immediately.
+
+Fixed with two tracking arrays in `quadx_dot_touch_env.py`:
+
+- `_touched_this_step[i]` — cleared at the start of each **outer** step
+  (via a `step()` override). Double-touch only fires if `_touched_this_step[i]`
+  is `False`, preventing sub-step re-triggers.
+- `_inside_radius[i]` — records whether the drone was inside each dot's radius
+  at the **end** of the previous outer step. Double-touch only fires when the
+  drone transitions from **outside → inside** (i.e., a genuine re-entry), so
+  the drone can linger inside a radius without penalty.
 
 ---
 
