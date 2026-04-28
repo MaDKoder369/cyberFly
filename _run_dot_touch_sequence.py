@@ -1,4 +1,4 @@
-"""Heuristic policy for QuadX-DotTouch-v1 environment - SEQUENTIAL mode.
+python _run_dot_touch_obstacles.pypython _run_dot_touch_obstacles.py"""Heuristic policy for QuadX-DotTouch-v1 environment - SEQUENTIAL mode.
 
 Dots are numbered 1..N (by their array index order).
 The drone must touch them in ascending number order: 1 → 2 → 3 → …
