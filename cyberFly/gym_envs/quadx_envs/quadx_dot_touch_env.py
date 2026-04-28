@@ -122,19 +122,7 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
 
         # Generate random dot positions inside the flight dome
         self._generate_dots()
-
-        # Track which dots have been touched (boolean array)
-        self.touched = np.zeros(self.num_dots, dtype=bool)
-        # Track dots touched within the current outer step (cleared each step)
-        self._touched_this_step = np.zeros(self.num_dots, dtype=bool)
-        # Track whether the drone was inside each dot's radius last step
-        # (prevents re-trigger while drone lingers inside the radius)
-        self._inside_radius = np.zeros(self.num_dots, dtype=bool)
-
-        # Info
-        self.info["dots_touched"] = 0
-        self.info["double_touch"] = False
-        self.info["all_dots_touched"] = False
+        self._init_touch_tracking()
 
         # Render dots
         self._dot_visuals: list[int] = []
@@ -144,6 +132,16 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
         super().end_reset()
 
         return self.state, self.info
+
+    def _init_touch_tracking(self) -> None:
+        """Initialize all dot-touch tracking state."""
+        self.touched = np.zeros(self.num_dots, dtype=bool)
+        self._touched_this_step = np.zeros(self.num_dots, dtype=bool)
+        self._was_inside_radius = np.zeros(self.num_dots, dtype=bool)
+        
+        self.info["dots_touched"] = 0
+        self.info["double_touch"] = False
+        self.info["all_dots_touched"] = False
 
     # ------------------------------------------------------------------
     # Dot generation helpers
@@ -237,8 +235,8 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
     # Step override
     # ------------------------------------------------------------------
     def step(self, action):
-        """Step the environment, resetting the per-step touch tracker."""
-        self._touched_this_step[:] = False
+        """Step the environment, clearing the per-step touch flags."""
+        self._touched_this_step.fill(False)
         return super().step(action)
     # ------------------------------------------------------------------
     # Reward / termination / truncation
@@ -247,37 +245,63 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
         """Compute termination, truncation, and reward for the current step."""
         super().compute_base_term_trunc_reward()
 
-        # Check each dot for proximity
-        currently_inside = self._current_distances < self.dot_touch_distance
-        for i in range(self.num_dots):
-            if currently_inside[i]:
-                if self.touched[i]:
-                    # Double-touch: only penalise if the drone re-entered after leaving
-                    if not self._inside_radius[i]:
-                        self.reward = -100.0
-                        self.info["double_touch"] = True
-                        self.termination |= True
-                        self._inside_radius = currently_inside
-                        return
-                else:
-                    # First touch
-                    self.touched[i] = True
-                    self._touched_this_step[i] = True
-                    self.reward += 50.0
-                    self.info["dots_touched"] = int(np.sum(self.touched))
-                    self._update_dot_colour(i)
-        self._inside_radius = currently_inside
-
-        # Small shaping reward: encourage getting closer to the nearest
-        # un-touched dot
-        untouched_mask = ~self.touched
-        if np.any(untouched_mask):
-            nearest_dist = float(np.min(self._current_distances[untouched_mask]))
+        # Check if drone is inside any dot's radius
+        is_inside = self._current_distances < self.dot_touch_distance
+        
+        # Process each dot the drone is currently inside
+        for i in np.where(is_inside)[0]:
+            if self._handle_dot_touch(i):
+                # Double-touch detected, terminate immediately
+                self._was_inside_radius = is_inside
+                return
+        
+        # Update radius tracking for next step
+        self._was_inside_radius = is_inside
+        
+        # Add proximity shaping reward
+        self._add_proximity_reward()
+        
+        # Check for completion
+        self._check_completion()
+    
+    def _handle_dot_touch(self, dot_idx: int) -> bool:
+        """Handle touching a dot. Returns True if double-touch detected.
+        
+        Args:
+            dot_idx: Index of the dot being touched.
+            
+        Returns:
+            True if this was a double-touch (terminate episode).
+        """
+        if self.touched[dot_idx]:
+            # Already touched — check if this is a re-entry
+            if not self._was_inside_radius[dot_idx]:
+                # Drone left and came back — double-touch!
+                self.reward = -100.0
+                self.info["double_touch"] = True
+                self.termination = True
+                return True
+        else:
+            # First touch — reward and mark
+            self.touched[dot_idx] = True
+            self._touched_this_step[dot_idx] = True
+            self.reward += 50.0
+            self.info["dots_touched"] = int(np.sum(self.touched))
+            self._update_dot_colour(dot_idx)
+        
+        return False
+    
+    def _add_proximity_reward(self) -> None:
+        """Add shaping reward for being close to nearest untouched dot."""
+        untouched_dots = ~self.touched
+        if np.any(untouched_dots):
+            nearest_dist = np.min(self._current_distances[untouched_dots])
             self.reward += 0.1 / max(nearest_dist, 0.01)
-
-        # All dots touched → success!
+    
+    def _check_completion(self) -> None:
+        """Check if all dots touched and award completion bonus."""
         if np.all(self.touched):
             self.reward += 200.0
             self.info["all_dots_touched"] = True
             self.info["env_complete"] = True
-            self.truncation |= True
+            self.truncation = True
