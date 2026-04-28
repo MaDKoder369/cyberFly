@@ -16,9 +16,10 @@ import cyberFly.gym_envs
 env = gymnasium.make(
     "cyberFly/QuadX-DotTouch-v1",  # Environment ID registered in cyberFly.gym_envs
     render_mode="human",            # Enable real-time 3D visualization window
-    flight_mode=6                   # Use local velocity control [vx, vy, vr, vz]
+    flight_mode=6,                  # Use local velocity control [vx, vy, vr, vz]
                                     # Mode 6: commands are body-frame velocities (m/s)
                                     # instead of low-level angular rates + thrust
+    truncate_on_completion=False    # Don't auto-end episode when dots done (allows return-to-base)
 )
 
 # Policy parameters - tuned for stable dot-touching behavior
@@ -26,6 +27,11 @@ TOUCH_RADIUS = 0.5    # Distance threshold (m) at which a dot is "touched" by th
 BRAKE_DISTANCE = 1.5  # Distance (m) at which the drone starts slowing down to approach gently
 MAX_VELOCITY = 2.0    # Maximum allowed velocity command (m/s) - prevents overly aggressive flight
 VELOCITY_GAIN = 1.5   # Proportional gain: converts position error (m) to velocity command (m/s)
+
+# Return-to-base feature
+RETURN_TO_BASE = True          # If True, drone returns to spawn point after touching all dots
+BASE_POSITION = np.array([0.0, 0.0, 1.0])  # Spawn position (origin at 1m altitude)
+BASE_ARRIVAL_THRESHOLD = 0.3   # Distance (m) at which we consider base "reached"
 
 
 def get_target_dot(dot_deltas, dot_touched):
@@ -112,6 +118,61 @@ def compute_velocity_command(target_vector, distance):
     return np.array([vx, vy, vr, vz])
 
 
+def compute_return_to_base_action(obs):
+    """Compute velocity command to return to base after completing all dots.
+    
+    Args:
+        obs: Observation dictionary from environment
+    
+    Returns:
+        action: [vx, vy, vr, vz] velocity command to fly toward base
+    """
+    # Extract current world-frame position from observation
+    # obs["attitude"][10:13] contains [x, y, z] position in meters
+    current_pos = obs["attitude"][10:13]
+    
+    # Compute world-frame vector from current position to base
+    # delta = target - current
+    world_delta = BASE_POSITION - current_pos
+    
+    # Calculate distance to base for braking logic
+    distance_to_base = np.linalg.norm(world_delta)
+    
+    # Import pybullet to get rotation matrix for world-to-body frame conversion
+    import pybullet as p
+    
+    # Extract quaternion from observation (indices 3:7)
+    quat = obs["attitude"][3:7]
+    
+    # Convert quaternion to 3x3 rotation matrix
+    # This matrix transforms from world frame to body frame
+    R = np.array(p.getMatrixFromQuaternion(quat)).reshape(3, 3)
+    
+    # Transform world-frame delta to body-frame delta
+    # body_delta = R @ world_delta (matrix-vector multiplication)
+    body_delta = R @ world_delta
+    
+    # Use the same braking logic as for dots: slow down as we approach base
+    if distance_to_base < BRAKE_DISTANCE:
+        # Linear ramp: speed_scale goes from 1.0 to 0.0 as we approach
+        min_brake_dist = BASE_ARRIVAL_THRESHOLD
+        speed_scale = max(0.0, (distance_to_base - min_brake_dist) / (BRAKE_DISTANCE - min_brake_dist))
+    else:
+        # Beyond braking distance: use full speed
+        speed_scale = 1.0
+    
+    # Apply proportional control with speed scaling
+    gain = VELOCITY_GAIN * speed_scale
+    
+    # Compute velocity commands for each axis (body frame)
+    vx = np.clip(gain * body_delta[0], -MAX_VELOCITY, MAX_VELOCITY)
+    vy = np.clip(gain * body_delta[1], -MAX_VELOCITY, MAX_VELOCITY)
+    vr = 0.0  # No yaw control
+    vz = np.clip(gain * body_delta[2], -MAX_VELOCITY, MAX_VELOCITY)
+    
+    return np.array([vx, vy, vr, vz])
+
+
 def log_progress(step, obs, info):
     """Print progress update."""
     # Extract the drone's world-frame position from the observation
@@ -168,6 +229,9 @@ episode = 0
 # Initialize step counter within current episode (resets to 0 on each episode)
 step = 0
 
+# Track whether all dots are touched and we're in return-to-base mode
+returning_to_base = False
+
 # Main training/evaluation loop - run for 10,000 steps total across all episodes
 for _ in range(10000):
     # Get target and compute action
@@ -177,11 +241,33 @@ for _ in range(10000):
     
     # Decide on action based on whether there's a valid target
     if target_vec is None:
-        # All dots touched - command zero velocity (hover in place)
-        # This shouldn't happen often since episode ends when all dots are touched
-        action = np.zeros(4)  # [vx=0, vy=0, vr=0, vz=0]
+        # All dots touched - check if we should return to base
+        if RETURN_TO_BASE:
+            # Calculate distance to base to check if we've arrived
+            current_pos = obs["attitude"][10:13]
+            distance_to_base = np.linalg.norm(BASE_POSITION - current_pos)
+            
+            if distance_to_base > BASE_ARRIVAL_THRESHOLD:
+                # Not at base yet - compute return action
+                returning_to_base = True
+                action = compute_return_to_base_action(obs)
+                
+                # Log return-to-base progress every 60 steps
+                if step % 60 == 0:
+                    print(f"  step={step:4d} RETURNING TO BASE - distance={distance_to_base:.2f}m")
+            else:
+                # Arrived at base - hover in place
+                action = np.zeros(4)
+                if returning_to_base:
+                    # Just arrived - log it once
+                    print(f"  step={step:4d} ARRIVED AT BASE!")
+                    returning_to_base = False
+        else:
+            # Return-to-base disabled - just hover
+            action = np.zeros(4)  # [vx=0, vy=0, vr=0, vz=0]
     else:
         # Valid target exists - compute velocity command with braking
+        returning_to_base = False
         action = compute_velocity_command(target_vec, dist)
     
     # Step environment with the computed action
@@ -212,6 +298,9 @@ for _ in range(10000):
         
         # Reset step counter to 0 for the new episode
         step = 0
+        
+        # Reset return-to-base flag for new episode
+        returning_to_base = False
 
 # Clean up: close the environment and release resources (PyBullet window, etc.)
 env.close()

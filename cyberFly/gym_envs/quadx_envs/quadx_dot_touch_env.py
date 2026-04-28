@@ -50,6 +50,7 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
         agent_hz: int = 30,
         render_mode: None | Literal["human", "rgb_array"] = None,
         render_resolution: tuple[int, int] = (480, 480),
+        truncate_on_completion: bool = True,
     ):
         """__init__.
 
@@ -66,6 +67,8 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
             agent_hz (int): looprate of the agent to environment interaction.
             render_mode (None | Literal["human", "rgb_array"]): render_mode.
             render_resolution (tuple[int, int]): render_resolution.
+            truncate_on_completion (bool): if True, episode ends immediately when
+                all dots are touched. If False, episode continues (allows return-to-base).
         """
         super().__init__(
             start_pos=np.array([[0.0, 0.0, 1.0]]),
@@ -81,6 +84,7 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
         self.num_dots = num_dots
         self.dot_touch_distance = dot_touch_distance
         self.flight_dome_size = flight_dome_size
+        self.truncate_on_completion = truncate_on_completion
 
         # Observation space:
         #   "attitude"    – standard drone state vector
@@ -330,17 +334,22 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
             # self._was_inside_radius[dot_idx] tells us if we were inside LAST step
             if not self._was_inside_radius[dot_idx]:
                 # Drone was OUTSIDE last step, now INSIDE - this is a re-entry!
-                # Apply large negative reward for double-touch violation
-                self.reward = -100.0
                 
-                # Set info flag so logs can report double-touch as termination reason
-                self.info["double_touch"] = True
-                
-                # Terminate the episode (this is a failure condition)
-                self.termination = True
-                
-                # Return True to signal double-touch detected (caller will exit early)
-                return True
+                # If all dots are already touched, don't penalize (allows return-to-base)
+                # The task is complete, so passing through old dots on the way home is okay
+                if not np.all(self.touched):
+                    # Not all dots touched yet - this is a genuine double-touch violation
+                    # Apply large negative reward for double-touch violation
+                    self.reward = -100.0
+                    
+                    # Set info flag so logs can report double-touch as termination reason
+                    self.info["double_touch"] = True
+                    
+                    # Terminate the episode (this is a failure condition)
+                    self.termination = True
+                    
+                    # Return True to signal double-touch detected (caller will exit early)
+                    return True
             # else: drone was inside last step and still inside - allow lingering
         else:
             # First touch of this dot - this is good behavior!
@@ -399,6 +408,9 @@ class QuadXDotTouchEnv(QuadXBaseEnv):
             # Set env_complete flag (used by parent class for tracking success)
             self.info["env_complete"] = True
             
-            # Truncate the episode (success condition, not a failure)
-            # truncation (not termination) signals successful completion
-            self.truncation = True
+            # Only truncate if the parameter allows it
+            # If truncate_on_completion is False, episode continues (enables return-to-base)
+            if self.truncate_on_completion:
+                # Truncate the episode (success condition, not a failure)
+                # truncation (not termination) signals successful completion
+                self.truncation = True
