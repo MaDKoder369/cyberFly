@@ -25,3 +25,8 @@ It is built on the [Bullet](https://pybullet.org/wordpress/) physics engine, off
 time-discrete steppable physics, Python bindings, and support for custom drones of any configuration, be it biplanes, quadcopters, rockets, and anything you can think of.
 
 To get started, visit the [documentation](documentation)!
+
+# Quick Start Tutorials
+
+- [Drone Teaching in cyberFly: Theory + Practical Exercises](drone_teaching_tutorial)
+- [Gymnasium Beginner's Guide](gymnasium_beginner_guide)
